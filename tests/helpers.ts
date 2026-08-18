@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { buildApp, type App } from '../src/server.js';
-import { signedAmount, type LedgerEntry } from '../src/types.js';
+import { randomUUID } from "node:crypto";
+import { buildApp, type App } from "../src/server.js";
+import { signedAmount, type LedgerEntry } from "../src/types.js";
 
 export type { App };
 
@@ -15,7 +15,7 @@ export interface Response<T = any> {
 
 async function call<T>(
   app: App,
-  method: 'GET' | 'POST',
+  method: "GET" | "POST",
   url: string,
   payload?: unknown,
 ): Promise<Response<T>> {
@@ -29,8 +29,8 @@ async function call<T>(
   return { statusCode: res.statusCode, body };
 }
 
-export const createAccount = (app: App, holderName = 'holder') =>
-  call<{ id: string }>(app, 'POST', '/accounts', { holderName });
+export const createAccount = (app: App, holderName = "holder") =>
+  call<{ id: string }>(app, "POST", "/accounts", { holderName });
 
 export const issue = (
   app: App,
@@ -38,7 +38,7 @@ export const issue = (
   shares: number,
   idempotencyKey: string = randomUUID(),
 ) =>
-  call<{ entryId: string; balance: number }>(app, 'POST', '/ledger/issue', {
+  call<{ entryId: string; balance: number }>(app, "POST", "/ledger/issue", {
     accountId,
     shares,
     idempotencyKey,
@@ -51,21 +51,34 @@ export const transfer = (
   shares: number,
   idempotencyKey: string = randomUUID(),
 ) =>
-  call<{ fromEntryId: string; toEntryId: string }>(app, 'POST', '/ledger/transfer', {
-    fromAccountId,
-    toAccountId,
-    shares,
-    idempotencyKey,
-  });
+  call<{ fromEntryId: string; toEntryId: string }>(
+    app,
+    "POST",
+    "/ledger/transfer",
+    {
+      fromAccountId,
+      toAccountId,
+      shares,
+      idempotencyKey,
+    },
+  );
 
 export const getBalance = (app: App, accountId: string) =>
-  call<{ balance: number }>(app, 'GET', `/accounts/${accountId}/balance`);
+  call<{ balance: number }>(app, "GET", `/accounts/${accountId}/balance`);
 
 export const getLedger = (app: App, accountId: string, limit = 50) =>
-  call<{ entries: LedgerEntry[] }>(app, 'GET', `/accounts/${accountId}/ledger?limit=${limit}`);
+  call<{ entries: LedgerEntry[] }>(
+    app,
+    "GET",
+    `/accounts/${accountId}/ledger?limit=${limit}`,
+  );
 
 export const getCompanySummary = (app: App) =>
-  call<{ issuedShares: number; remainingAuthorized: number }>(app, 'GET', '/company/summary');
+  call<{ issuedShares: number; remainingAuthorized: number }>(
+    app,
+    "GET",
+    "/company/summary",
+  );
 
 /** Creates `count` accounts, each pre-loaded with `sharesEach`, writing straight
  *  to the store. Used by the load test so setup cannot itself introduce races. */
@@ -81,19 +94,23 @@ export async function seedAccounts(
     ids.push(id);
     work.push(
       (async () => {
-        await app.store.putAccount({ id, holderName: `holder-${i}`, createdAt: Date.now() });
+        await app.store.putAccount({
+          id,
+          holderName: `holder-${i}`,
+          createdAt: Date.now(),
+        });
         await app.store.appendEntry({
           id: randomUUID(),
           seq: 1,
           accountId: id,
-          type: 'ISSUE',
+          type: "ISSUE",
           shares: sharesEach,
           idempotencyKey: `seed-${id}`,
           createdAt: Date.now(),
         });
         await app.store.putBalance(id, sharesEach);
         await app.store.putIdempotency(`seed-${id}`, {
-          entryId: 'seed',
+          entryId: "seed",
           accountId: id,
           shares: sharesEach,
           balance: sharesEach,
@@ -140,13 +157,13 @@ export async function findInvariantViolations(app: App): Promise<Violation[]> {
 
     if (derived !== projected.value) {
       violations.push({
-        kind: 'I1_PROJECTION_DIVERGED',
+        kind: "I1_PROJECTION_DIVERGED",
         detail: `account ${account.id}: ledger says ${derived}, balance projection says ${projected.value}`,
       });
     }
     if (derived < 0) {
       violations.push({
-        kind: 'I2_NEGATIVE_BALANCE',
+        kind: "I2_NEGATIVE_BALANCE",
         detail: `account ${account.id}: derived balance is ${derived}`,
       });
     }
@@ -156,7 +173,7 @@ export async function findInvariantViolations(app: App): Promise<Violation[]> {
     const expected = seqs.map((_, i) => i + 1);
     if (JSON.stringify(seqs) !== JSON.stringify(expected)) {
       violations.push({
-        kind: 'I4_BAD_SEQUENCE',
+        kind: "I4_BAD_SEQUENCE",
         detail: `account ${account.id}: seq values ${JSON.stringify(seqs)}`,
       });
     }
@@ -165,17 +182,17 @@ export async function findInvariantViolations(app: App): Promise<Violation[]> {
   // I3: issued never exceeds authorized, and the treasury counter is accurate.
   const company = await app.store.getCompanyState();
   const totalIssued = entries
-    .filter((e) => e.type === 'ISSUE')
+    .filter((e) => e.type === "ISSUE")
     .reduce((sum, e) => sum + e.shares, 0);
   if (totalIssued > company.value.authorizedShares) {
     violations.push({
-      kind: 'I3_OVER_AUTHORIZED',
+      kind: "I3_OVER_AUTHORIZED",
       detail: `issued ${totalIssued} shares against an authorized ceiling of ${company.value.authorizedShares}`,
     });
   }
   if (totalIssued !== company.value.issuedShares) {
     violations.push({
-      kind: 'I3_TREASURY_DRIFT',
+      kind: "I3_TREASURY_DRIFT",
       detail: `ledger shows ${totalIssued} issued, treasury counter says ${company.value.issuedShares}`,
     });
   }
@@ -189,25 +206,25 @@ export async function findInvariantViolations(app: App): Promise<Violation[]> {
     byKey.set(entry.idempotencyKey, list);
   }
   for (const [key, group] of byKey) {
-    const issues = group.filter((e) => e.type === 'ISSUE');
-    const outs = group.filter((e) => e.type === 'TRANSFER_OUT');
-    const ins = group.filter((e) => e.type === 'TRANSFER_IN');
+    const issues = group.filter((e) => e.type === "ISSUE");
+    const outs = group.filter((e) => e.type === "TRANSFER_OUT");
+    const ins = group.filter((e) => e.type === "TRANSFER_IN");
 
     if (issues.length > 1) {
       violations.push({
-        kind: 'I5_DUPLICATE_APPLY',
+        kind: "I5_DUPLICATE_APPLY",
         detail: `idempotencyKey ${key} produced ${issues.length} ISSUE entries`,
       });
     }
     if (outs.length !== ins.length) {
       violations.push({
-        kind: 'I6_UNBALANCED_TRANSFER',
+        kind: "I6_UNBALANCED_TRANSFER",
         detail: `idempotencyKey ${key}: ${outs.length} out-legs vs ${ins.length} in-legs`,
       });
     }
     if (outs.length > 1) {
       violations.push({
-        kind: 'I5_DUPLICATE_APPLY',
+        kind: "I5_DUPLICATE_APPLY",
         detail: `idempotencyKey ${key} produced ${outs.length} transfers`,
       });
     }
@@ -223,13 +240,16 @@ export async function withConcurrency<T>(
 ): Promise<T[]> {
   const results = new Array<T>(tasks.length);
   let cursor = 0;
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
-    while (true) {
-      const index = cursor++;
-      if (index >= tasks.length) return;
-      results[index] = await tasks[index]!();
-    }
-  });
+  const workers = Array.from(
+    { length: Math.min(concurrency, tasks.length) },
+    async () => {
+      while (true) {
+        const index = cursor++;
+        if (index >= tasks.length) return;
+        results[index] = await tasks[index]!();
+      }
+    },
+  );
   await Promise.all(workers);
   return results;
 }
@@ -249,6 +269,9 @@ export function seededRandom(seed: number): () => number {
 export function percentile(values: number[], p: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
+  const index = Math.min(
+    sorted.length - 1,
+    Math.ceil((p / 100) * sorted.length) - 1,
+  );
   return sorted[Math.max(0, index)]!;
 }

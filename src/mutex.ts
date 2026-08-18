@@ -15,3 +15,37 @@ export class Mutex {
     return result;
   }
 }
+
+/**
+ * One `Mutex` per key, so unrelated keys never queue behind each other.
+ */
+export class KeyedMutex {
+  private readonly locks = new Map<string, Mutex>();
+
+  private lockFor(key: string): Mutex {
+    let mutex = this.locks.get(key);
+    if (!mutex) {
+      mutex = new Mutex();
+      this.locks.set(key, mutex);
+    }
+    return mutex;
+  }
+
+  run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    return this.lockFor(key).run(fn);
+  }
+
+  /**
+   * Acquires every key's lock, always in sorted order, so two callers that need
+   * the same pair of keys (e.g. a transfer and its reverse) can never deadlock
+   * by acquiring them in opposite order.
+   */
+  runMany<T>(keys: string[], fn: () => Promise<T>): Promise<T> {
+    const sorted = [...new Set(keys)].sort();
+    const acquire = (index: number): Promise<T> =>
+      index === sorted.length
+        ? fn()
+        : this.lockFor(sorted[index]!).run(() => acquire(index + 1));
+    return acquire(0);
+  }
+}

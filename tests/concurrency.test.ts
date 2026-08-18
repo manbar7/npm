@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { randomUUID } from "node:crypto";
+import { describe, expect, it } from "vitest";
 import {
   createAccount,
   findInvariantViolations,
@@ -8,7 +8,7 @@ import {
   makeApp,
   transfer,
   type App,
-} from './helpers.js';
+} from "./helpers.js";
 
 async function account(app: App, name: string): Promise<string> {
   const res = await createAccount(app, name);
@@ -16,32 +16,34 @@ async function account(app: App, name: string): Promise<string> {
   return res.body.id;
 }
 
-describe('concurrency', () => {
-  it('never lets an account transfer out more shares than it holds', async () => {
+describe("concurrency", () => {
+  it("never lets an account transfer out more shares than it holds", async () => {
     const app = makeApp(1_000_000);
-    const alice = await account(app, 'alice');
-    const bob = await account(app, 'bob');
+    const alice = await account(app, "alice");
+    const bob = await account(app, "bob");
 
     await issue(app, alice, 100);
 
     // 40 clients each try to move 10 shares out of a 100-share account at the
     // same instant. Exactly 10 of them can legitimately succeed.
-    const attempts = Array.from({ length: 40 }, () => transfer(app, alice, bob, 10));
+    const attempts = Array.from({ length: 40 }, () =>
+      transfer(app, alice, bob, 10),
+    );
     const results = await Promise.all(attempts);
 
     const accepted = results.filter((r) => r.statusCode === 201).length;
     const rejected = results.filter((r) => r.statusCode === 409).length;
 
-    expect(accepted).toBe(10);
-    expect(rejected).toBe(30);
+    expect(accepted)?.toBe(10);
+    expect(rejected)?.toBe(30);
     expect((await getBalance(app, alice)).body.balance).toBe(0);
     expect((await getBalance(app, bob)).body.balance).toBe(100);
     expect(await findInvariantViolations(app)).toEqual([]);
   });
 
-  it('never issues more shares than the board authorized', async () => {
+  it("never issues more shares than the board authorized", async () => {
     const app = makeApp(1_000);
-    const alice = await account(app, 'alice');
+    const alice = await account(app, "alice");
 
     // 20 concurrent issues of 100 shares against a 1,000 share ceiling.
     const results = await Promise.all(
@@ -54,9 +56,9 @@ describe('concurrency', () => {
     expect(await findInvariantViolations(app)).toEqual([]);
   });
 
-  it('assigns each account a unique, gap-free sequence number', async () => {
+  it("assigns each account a unique, gap-free sequence number", async () => {
     const app = makeApp(1_000_000);
-    const alice = await account(app, 'alice');
+    const alice = await account(app, "alice");
 
     await Promise.all(Array.from({ length: 30 }, () => issue(app, alice, 1)));
 
@@ -65,7 +67,7 @@ describe('concurrency', () => {
     expect(seqs).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
   });
 
-  it('keeps the balance projection in agreement with the ledger under mixed load', async () => {
+  it("keeps the balance projection in agreement with the ledger under mixed load", async () => {
     const app = makeApp(1_000_000);
     const ids = await Promise.all(
       Array.from({ length: 6 }, (_, i) => account(app, `holder-${i}`)),
@@ -85,10 +87,10 @@ describe('concurrency', () => {
     expect(await findInvariantViolations(app)).toEqual([]);
   });
 
-  it('conserves total shares across concurrent transfers in both directions', async () => {
+  it("conserves total shares across concurrent transfers in both directions", async () => {
     const app = makeApp(1_000_000);
-    const alice = await account(app, 'alice');
-    const bob = await account(app, 'bob');
+    const alice = await account(app, "alice");
+    const bob = await account(app, "bob");
 
     await issue(app, alice, 5_000);
     await issue(app, bob, 5_000);
@@ -102,15 +104,16 @@ describe('concurrency', () => {
     await Promise.all(operations);
 
     const total =
-      (await getBalance(app, alice)).body.balance + (await getBalance(app, bob)).body.balance;
+      (await getBalance(app, alice)).body.balance +
+      (await getBalance(app, bob)).body.balance;
     expect(total).toBe(10_000);
     expect(await findInvariantViolations(app)).toEqual([]);
   });
 
-  it('does not lose a transfer leg when the same pair is hit concurrently', async () => {
+  it("does not lose a transfer leg when the same pair is hit concurrently", async () => {
     const app = makeApp(1_000_000);
-    const alice = await account(app, 'alice');
-    const bob = await account(app, 'bob');
+    const alice = await account(app, "alice");
+    const bob = await account(app, "bob");
     await issue(app, alice, 2_000);
 
     const keys = Array.from({ length: 25 }, () => randomUUID());
@@ -120,8 +123,8 @@ describe('concurrency', () => {
     for (const key of keys) {
       const legs = entries.filter((e) => e.idempotencyKey === key);
       if (legs.length === 0) continue; // rejected outright is fine
-      expect(legs.filter((e) => e.type === 'TRANSFER_OUT')).toHaveLength(1);
-      expect(legs.filter((e) => e.type === 'TRANSFER_IN')).toHaveLength(1);
+      expect(legs.filter((e) => e.type === "TRANSFER_OUT")).toHaveLength(1);
+      expect(legs.filter((e) => e.type === "TRANSFER_IN")).toHaveLength(1);
     }
     expect(await findInvariantViolations(app)).toEqual([]);
   });

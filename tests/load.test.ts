@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { randomUUID } from "node:crypto";
+import { describe, expect, it } from "vitest";
 import {
   findInvariantViolations,
   makeApp,
@@ -8,7 +8,7 @@ import {
   seededRandom,
   withConcurrency,
   type App,
-} from './helpers.js';
+} from "./helpers.js";
 
 /**
  * Production-shaped load. The numbers below mirror our peak traffic: a
@@ -31,7 +31,7 @@ const CONCURRENCY = 80;
 const WALL_CLOCK_BUDGET_MS = 3_000;
 const READ_P99_BUDGET_MS = 100;
 
-type OpKind = 'balance' | 'ledger' | 'summary' | 'transfer';
+type OpKind = "balance" | "ledger" | "summary" | "transfer";
 
 interface Op {
   kind: OpKind;
@@ -48,7 +48,13 @@ function buildWorkload(accountIds: string[]): Op[] {
   for (let i = 0; i < TOTAL_OPERATIONS; i++) {
     const roll = random();
     const kind: OpKind =
-      roll < 0.6 ? 'balance' : roll < 0.75 ? 'ledger' : roll < 0.8 ? 'summary' : 'transfer';
+      roll < 0.6
+        ? "balance"
+        : roll < 0.75
+          ? "ledger"
+          : roll < 0.8
+            ? "summary"
+            : "transfer";
 
     const fromIndex = Math.floor(random() * accountIds.length);
     let toIndex = Math.floor(random() * accountIds.length);
@@ -67,16 +73,22 @@ function buildWorkload(accountIds: string[]): Op[] {
 
 async function execute(app: App, op: Op) {
   switch (op.kind) {
-    case 'balance':
-      return app.server.inject({ method: 'GET', url: `/accounts/${op.accountId}/balance` });
-    case 'ledger':
-      return app.server.inject({ method: 'GET', url: `/accounts/${op.accountId}/ledger?limit=20` });
-    case 'summary':
-      return app.server.inject({ method: 'GET', url: '/company/summary' });
-    case 'transfer':
+    case "balance":
       return app.server.inject({
-        method: 'POST',
-        url: '/ledger/transfer',
+        method: "GET",
+        url: `/accounts/${op.accountId}/balance`,
+      });
+    case "ledger":
+      return app.server.inject({
+        method: "GET",
+        url: `/accounts/${op.accountId}/ledger?limit=20`,
+      });
+    case "summary":
+      return app.server.inject({ method: "GET", url: "/company/summary" });
+    case "transfer":
+      return app.server.inject({
+        method: "POST",
+        url: "/ledger/transfer",
         payload: {
           fromAccountId: op.accountId,
           toAccountId: op.counterpartyId,
@@ -87,8 +99,8 @@ async function execute(app: App, op: Op) {
   }
 }
 
-describe('load', () => {
-  it('sustains peak traffic within budget and without corrupting the ledger', async () => {
+describe("load", () => {
+  it("sustains peak traffic within budget and without corrupting the ledger", async () => {
     const app = makeApp(10_000_000);
     const accountIds = await seedAccounts(app, ACCOUNTS, SHARES_PER_ACCOUNT);
     const ops = buildWorkload(accountIds);
@@ -103,8 +115,11 @@ describe('load', () => {
         const t0 = performance.now();
         const res = await execute(app, op);
         const elapsed = performance.now() - t0;
-        (op.kind === 'transfer' ? writeLatencies : readLatencies).push(elapsed);
-        statusCounts.set(res.statusCode, (statusCounts.get(res.statusCode) ?? 0) + 1);
+        (op.kind === "transfer" ? writeLatencies : readLatencies).push(elapsed);
+        statusCounts.set(
+          res.statusCode,
+          (statusCounts.get(res.statusCode) ?? 0) + 1,
+        );
       }),
       CONCURRENCY,
     );
@@ -118,7 +133,7 @@ describe('load', () => {
 
     console.log(
       [
-        '',
+        "",
         `  operations      ${ops.length} at concurrency ${CONCURRENCY}`,
         `  wall clock      ${wallClockMs.toFixed(0)} ms   (budget ${WALL_CLOCK_BUDGET_MS} ms)`,
         `  throughput      ${((ops.length / wallClockMs) * 1000).toFixed(0)} ops/sec`,
@@ -126,8 +141,8 @@ describe('load', () => {
         `  write p50/p99   ${percentile(writeLatencies, 50).toFixed(1)} / ${writeP99.toFixed(1)} ms`,
         `  statuses        ${JSON.stringify(Object.fromEntries(statusCounts))}`,
         `  store calls     ${app.store.stats.reads} reads / ${app.store.stats.writes} writes`,
-        '',
-      ].join('\n'),
+        "",
+      ].join("\n"),
     );
 
     expect(serverErrors).toBe(0);
