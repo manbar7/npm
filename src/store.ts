@@ -1,4 +1,4 @@
-import type { Account, CompanyState, LedgerEntry } from './types.js';
+import type { Account, CompanyState, LedgerEntry } from "./types.js";
 
 /**
  * Simulated latency of the backing datastore. Every method below is a *network
@@ -8,7 +8,8 @@ import type { Account, CompanyState, LedgerEntry } from './types.js';
 const READ_LATENCY_MS = 2;
 const WRITE_LATENCY_MS = 3;
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export interface Versioned<T> {
   value: T;
@@ -103,7 +104,10 @@ export class Store {
   async putBalance(accountId: string, value: number): Promise<void> {
     await this.write(() => {
       const current = this.balances.get(accountId);
-      this.balances.set(accountId, { value, version: (current?.version ?? 0) + 1 });
+      this.balances.set(accountId, {
+        value,
+        version: (current?.version ?? 0) + 1,
+      });
     });
   }
 
@@ -111,7 +115,11 @@ export class Store {
    * Atomic compare-and-set. Writes `value` only if the stored version still
    * equals `expectedVersion`. Returns false if another writer got there first.
    */
-  async casBalance(accountId: string, expectedVersion: number, value: number): Promise<boolean> {
+  async casBalance(
+    accountId: string,
+    expectedVersion: number,
+    value: number,
+  ): Promise<boolean> {
     let ok = false;
     await this.write(() => {
       const current = this.balances.get(accountId) ?? { value: 0, version: 0 };
@@ -125,21 +133,33 @@ export class Store {
   // --- company / treasury state ------------------------------------------
 
   async getCompanyState(): Promise<Versioned<CompanyState>> {
-    return this.read({ value: { ...this.companyState.value }, version: this.companyState.version });
+    return this.read({
+      value: { ...this.companyState.value },
+      version: this.companyState.version,
+    });
   }
 
   async putCompanyState(value: CompanyState): Promise<void> {
     await this.write(() => {
-      this.companyState = { value: { ...value }, version: this.companyState.version + 1 };
+      this.companyState = {
+        value: { ...value },
+        version: this.companyState.version + 1,
+      };
     });
   }
 
   /** Atomic compare-and-set on the company record. */
-  async casCompanyState(expectedVersion: number, value: CompanyState): Promise<boolean> {
+  async casCompanyState(
+    expectedVersion: number,
+    value: CompanyState,
+  ): Promise<boolean> {
     let ok = false;
     await this.write(() => {
       if (this.companyState.version !== expectedVersion) return;
-      this.companyState = { value: { ...value }, version: this.companyState.version + 1 };
+      this.companyState = {
+        value: { ...value },
+        version: this.companyState.version + 1,
+      };
       ok = true;
     });
     return ok;
@@ -157,6 +177,12 @@ export class Store {
     });
   }
 
+  async deleteIdempotency(key: string): Promise<void> {
+    await this.write(() => {
+      this.idempotency.delete(key);
+    });
+  }
+
   /**
    * Atomic "insert if absent". Returns true if this caller claimed the key,
    * false if it was already present.
@@ -164,7 +190,14 @@ export class Store {
   async claimIdempotency(key: string, result: unknown): Promise<boolean> {
     let ok = false;
     await this.write(() => {
-      if (this.idempotency.has(key)) return;
+      const existing = this.idempotency.get(key) as
+        | { result?: unknown; leaseUntil?: number }
+        | undefined;
+      const expiredPending =
+        existing &&
+        existing.result === undefined &&
+        (existing.leaseUntil ?? 0) <= Date.now();
+      if (existing && !expiredPending) return;
       this.idempotency.set(key, result);
       ok = true;
     });
@@ -175,6 +208,9 @@ export class Store {
 
   /** Synchronous bootstrap. Only used at startup and by tests. */
   seedCompany(authorizedShares: number): void {
-    this.companyState = { value: { authorizedShares, issuedShares: 0 }, version: 0 };
+    this.companyState = {
+      value: { authorizedShares, issuedShares: 0 },
+      version: 0,
+    };
   }
 }
