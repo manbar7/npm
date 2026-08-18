@@ -209,88 +209,88 @@ export class LedgerService {
     }
     assertValidShares(cmd.shares);
 
-    await this.getAccount(cmd.accountId);
-
     return this.runIdempotent(cmd.idempotencyKey, issueFingerprint(cmd), () =>
       // Everything below is check-then-write, so it must all run under this
       // account's lock — otherwise two concurrent issues can both read the
       // same stale balance/seq state before either one writes.
-      this.locks.run(cmd.accountId, async () => {
-        // The authorized-shares ceiling is shared across every account, so its
-        // check-then-write needs its own lock, separate from the per-account one.
-        await this.locks.run(LedgerService.COMPANY_LOCK, async () => {
-          const company = await this.store.getCompanyState();
-          if (
-            company.value.issuedShares + cmd.shares >
-            company.value.authorizedShares
-          ) {
-            throw new AppError(
-              409,
-              "AUTHORIZED_SHARES_EXCEEDED",
-              `cannot issue ${cmd.shares}: only ${
-                company.value.authorizedShares - company.value.issuedShares
-              } shares remain authorized`,
-            );
-          }
-          await this.store.putCompanyState({
-            authorizedShares: company.value.authorizedShares,
-            issuedShares: company.value.issuedShares + cmd.shares,
-          });
-        });
-
-        try {
-          const snapshot = await this.getWriteSnapshot(cmd.accountId);
-          const balance = snapshot.balance;
-          const existing = snapshot.entries;
-          this.accountSnapshots.set(cmd.accountId, {
-            balance,
-            entries: [...existing],
-            version: snapshot.version,
-          });
-          const entry: LedgerEntry = {
-            id: randomUUID(),
-            seq: existing.length + 1,
-            accountId: cmd.accountId,
-            type: "ISSUE",
-            shares: cmd.shares,
-            idempotencyKey: cmd.idempotencyKey,
-            createdAt: Date.now(),
-          };
-          await this.store.appendEntry(entry);
-          await this.putBalanceWithRetry(cmd.accountId, balance + cmd.shares);
-
-          const result: IssueResult = {
-            entryId: entry.id,
-            accountId: cmd.accountId,
-            shares: cmd.shares,
-            balance: balance + cmd.shares,
-          };
-          this.accountSnapshots.set(cmd.accountId, {
-            balance: result.balance,
-            entries: [...existing, entry],
-            version: (this.accountVersions.get(cmd.accountId) ?? 0) + 1,
-          });
-          this.accountVersions.set(
-            cmd.accountId,
-            (this.accountVersions.get(cmd.accountId) ?? 0) + 1,
-          );
-          return result;
-        } catch (error) {
+      this.getAccount(cmd.accountId).then(() =>
+        this.locks.run(cmd.accountId, async () => {
+          // The authorized-shares ceiling is shared across every account, so its
+          // check-then-write needs its own lock, separate from the per-account one.
           await this.locks.run(LedgerService.COMPANY_LOCK, async () => {
-            const current = await this.store.getCompanyState();
-            if (current.value.issuedShares < cmd.shares) {
-              throw new Error("company state rollback failed", {
-                cause: error,
-              });
+            const company = await this.store.getCompanyState();
+            if (
+              company.value.issuedShares + cmd.shares >
+              company.value.authorizedShares
+            ) {
+              throw new AppError(
+                409,
+                "AUTHORIZED_SHARES_EXCEEDED",
+                `cannot issue ${cmd.shares}: only ${
+                  company.value.authorizedShares - company.value.issuedShares
+                } shares remain authorized`,
+              );
             }
             await this.store.putCompanyState({
-              authorizedShares: current.value.authorizedShares,
-              issuedShares: current.value.issuedShares - cmd.shares,
+              authorizedShares: company.value.authorizedShares,
+              issuedShares: company.value.issuedShares + cmd.shares,
             });
           });
-          throw error;
-        }
-      }),
+
+          try {
+            const snapshot = await this.getWriteSnapshot(cmd.accountId);
+            const balance = snapshot.balance;
+            const existing = snapshot.entries;
+            this.accountSnapshots.set(cmd.accountId, {
+              balance,
+              entries: [...existing],
+              version: snapshot.version,
+            });
+            const entry: LedgerEntry = {
+              id: randomUUID(),
+              seq: existing.length + 1,
+              accountId: cmd.accountId,
+              type: "ISSUE",
+              shares: cmd.shares,
+              idempotencyKey: cmd.idempotencyKey,
+              createdAt: Date.now(),
+            };
+            await this.store.appendEntry(entry);
+            await this.putBalanceWithRetry(cmd.accountId, balance + cmd.shares);
+
+            const result: IssueResult = {
+              entryId: entry.id,
+              accountId: cmd.accountId,
+              shares: cmd.shares,
+              balance: balance + cmd.shares,
+            };
+            this.accountSnapshots.set(cmd.accountId, {
+              balance: result.balance,
+              entries: [...existing, entry],
+              version: (this.accountVersions.get(cmd.accountId) ?? 0) + 1,
+            });
+            this.accountVersions.set(
+              cmd.accountId,
+              (this.accountVersions.get(cmd.accountId) ?? 0) + 1,
+            );
+            return result;
+          } catch (error) {
+            await this.locks.run(LedgerService.COMPANY_LOCK, async () => {
+              const current = await this.store.getCompanyState();
+              if (current.value.issuedShares < cmd.shares) {
+                throw new Error("company state rollback failed", {
+                  cause: error,
+                });
+              }
+              await this.store.putCompanyState({
+                authorizedShares: current.value.authorizedShares,
+                issuedShares: current.value.issuedShares - cmd.shares,
+              });
+            });
+            throw error;
+          }
+        }),
+      ),
     );
   }
 
@@ -312,103 +312,103 @@ export class LedgerService {
       );
     }
 
-    await Promise.all([
-      this.getAccount(cmd.fromAccountId),
-      this.getAccount(cmd.toAccountId),
-    ]);
-
     return this.runIdempotent(
       cmd.idempotencyKey,
       transferFingerprint(cmd),
       () =>
         // Lock both accounts, always in sorted order, so this and its reverse
         // (B->A) can never each hold one account's lock while waiting on the other.
-        this.locks.runMany([cmd.fromAccountId, cmd.toAccountId], async () => {
-          const [fromSnapshot, toSnapshot] = await Promise.all([
-            this.getWriteSnapshot(cmd.fromAccountId),
-            this.getWriteSnapshot(cmd.toAccountId),
-          ]);
-          const fromBalance = { value: fromSnapshot.balance };
-          const toBalance = { value: toSnapshot.balance };
-          const fromEntries = fromSnapshot.entries;
-          const toEntries = toSnapshot.entries;
-          if (fromBalance.value < cmd.shares) {
-            throw new AppError(
-              409,
-              "INSUFFICIENT_SHARES",
-              `account ${cmd.fromAccountId} holds ${fromBalance.value}, cannot transfer ${cmd.shares}`,
-            );
-          }
-          this.accountSnapshots.set(cmd.fromAccountId, {
-            balance: fromBalance.value,
-            entries: [...fromEntries],
-            version: this.accountVersions.get(cmd.fromAccountId) ?? 0,
-          });
-          this.accountSnapshots.set(cmd.toAccountId, {
-            balance: toBalance.value,
-            entries: [...toEntries],
-            version: this.accountVersions.get(cmd.toAccountId) ?? 0,
-          });
-          const outEntry: LedgerEntry = {
-            id: randomUUID(),
-            seq: fromEntries.length + 1,
-            accountId: cmd.fromAccountId,
-            type: "TRANSFER_OUT",
-            shares: cmd.shares,
-            counterpartyId: cmd.toAccountId,
-            idempotencyKey: cmd.idempotencyKey,
-            createdAt: Date.now(),
-          };
-          const inEntry: LedgerEntry = {
-            id: randomUUID(),
-            seq: toEntries.length + 1,
-            accountId: cmd.toAccountId,
-            type: "TRANSFER_IN",
-            shares: cmd.shares,
-            counterpartyId: cmd.fromAccountId,
-            idempotencyKey: cmd.idempotencyKey,
-            createdAt: Date.now(),
-          };
-          await Promise.all([
-            this.store.appendEntry(outEntry),
-            this.store.putBalance(
-              cmd.fromAccountId,
-              fromBalance.value - cmd.shares,
-            ),
-            this.store.appendEntry(inEntry),
-            this.store.putBalance(
-              cmd.toAccountId,
-              toBalance.value + cmd.shares,
-            ),
-          ]);
+        Promise.all([
+          this.getAccount(cmd.fromAccountId),
+          this.getAccount(cmd.toAccountId),
+        ]).then(() =>
+          this.locks.runMany([cmd.fromAccountId, cmd.toAccountId], async () => {
+            const [fromSnapshot, toSnapshot] = await Promise.all([
+              this.getWriteSnapshot(cmd.fromAccountId),
+              this.getWriteSnapshot(cmd.toAccountId),
+            ]);
+            const fromBalance = { value: fromSnapshot.balance };
+            const toBalance = { value: toSnapshot.balance };
+            const fromEntries = fromSnapshot.entries;
+            const toEntries = toSnapshot.entries;
+            if (fromBalance.value < cmd.shares) {
+              throw new AppError(
+                409,
+                "INSUFFICIENT_SHARES",
+                `account ${cmd.fromAccountId} holds ${fromBalance.value}, cannot transfer ${cmd.shares}`,
+              );
+            }
+            this.accountSnapshots.set(cmd.fromAccountId, {
+              balance: fromBalance.value,
+              entries: [...fromEntries],
+              version: this.accountVersions.get(cmd.fromAccountId) ?? 0,
+            });
+            this.accountSnapshots.set(cmd.toAccountId, {
+              balance: toBalance.value,
+              entries: [...toEntries],
+              version: this.accountVersions.get(cmd.toAccountId) ?? 0,
+            });
+            const outEntry: LedgerEntry = {
+              id: randomUUID(),
+              seq: fromEntries.length + 1,
+              accountId: cmd.fromAccountId,
+              type: "TRANSFER_OUT",
+              shares: cmd.shares,
+              counterpartyId: cmd.toAccountId,
+              idempotencyKey: cmd.idempotencyKey,
+              createdAt: Date.now(),
+            };
+            const inEntry: LedgerEntry = {
+              id: randomUUID(),
+              seq: toEntries.length + 1,
+              accountId: cmd.toAccountId,
+              type: "TRANSFER_IN",
+              shares: cmd.shares,
+              counterpartyId: cmd.fromAccountId,
+              idempotencyKey: cmd.idempotencyKey,
+              createdAt: Date.now(),
+            };
+            await Promise.all([
+              this.store.appendEntry(outEntry),
+              this.store.putBalance(
+                cmd.fromAccountId,
+                fromBalance.value - cmd.shares,
+              ),
+              this.store.appendEntry(inEntry),
+              this.store.putBalance(
+                cmd.toAccountId,
+                toBalance.value + cmd.shares,
+              ),
+            ]);
 
-          const result: TransferResult = {
-            fromEntryId: outEntry.id,
-            toEntryId: inEntry.id,
-            fromBalance: fromBalance.value - cmd.shares,
-            toBalance: toBalance.value + cmd.shares,
-            shares: cmd.shares,
-          };
-          this.accountSnapshots.set(cmd.fromAccountId, {
-            balance: result.fromBalance,
-            entries: [...fromEntries, outEntry],
-            version: (this.accountVersions.get(cmd.fromAccountId) ?? 0) + 1,
-          });
-          this.accountSnapshots.set(cmd.toAccountId, {
-            balance: result.toBalance,
-            entries: [...toEntries, inEntry],
-            version: (this.accountVersions.get(cmd.toAccountId) ?? 0) + 1,
-          });
-          this.accountVersions.set(
-            cmd.fromAccountId,
-            (this.accountVersions.get(cmd.fromAccountId) ?? 0) + 1,
-          );
-          this.accountVersions.set(
-            cmd.toAccountId,
-            (this.accountVersions.get(cmd.toAccountId) ?? 0) + 1,
-          );
-          return result;
-        }),
+            const result: TransferResult = {
+              fromEntryId: outEntry.id,
+              toEntryId: inEntry.id,
+              fromBalance: fromBalance.value - cmd.shares,
+              toBalance: toBalance.value + cmd.shares,
+              shares: cmd.shares,
+            };
+            this.accountSnapshots.set(cmd.fromAccountId, {
+              balance: result.fromBalance,
+              entries: [...fromEntries, outEntry],
+              version: (this.accountVersions.get(cmd.fromAccountId) ?? 0) + 1,
+            });
+            this.accountSnapshots.set(cmd.toAccountId, {
+              balance: result.toBalance,
+              entries: [...toEntries, inEntry],
+              version: (this.accountVersions.get(cmd.toAccountId) ?? 0) + 1,
+            });
+            this.accountVersions.set(
+              cmd.fromAccountId,
+              (this.accountVersions.get(cmd.fromAccountId) ?? 0) + 1,
+            );
+            this.accountVersions.set(
+              cmd.toAccountId,
+              (this.accountVersions.get(cmd.toAccountId) ?? 0) + 1,
+            );
+            return result;
+          }),
+        ),
     );
   }
 
@@ -436,15 +436,7 @@ export class LedgerService {
         };
       }
 
-      const account = await this.store.getAccount(accountId);
-      if (!account) {
-        throw new AppError(
-          404,
-          "ACCOUNT_NOT_FOUND",
-          `no such account: ${accountId}`,
-        );
-      }
-
+      await this.getAccount(accountId);
       const [balance, entries] = await Promise.all([
         this.store.getBalance(accountId),
         this.store.listEntries(accountId),

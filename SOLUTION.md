@@ -23,10 +23,12 @@
 - **Crash recovery:** Pending idempotency claims carry a 30-second lease and expired pending claims can be reclaimed atomically.
 - **Issue reservation recovery:** If an issue fails after reserving treasury shares, the reservation is released under the company lock.
 - **Projection write recovery:** Balance projection writes are retried because repeating the same value is safe after an append-only ledger write.
+- **Early exits:** Validation runs before datastore work; cached replays and key conflicts return before account lookups.
+- **Account metadata cache:** Known accounts avoid repeated existence reads during writes and cold snapshot initialization.
 - **Read snapshots:** Reads use account snapshots instead of waiting behind transfer writes.
 - **Snapshot publication:** Pre-operation snapshots cover cold reads; post-operation snapshots publish only after all operation writes finish.
 - **Defensive copies:** Read paths copy entry arrays so callers cannot mutate process-local snapshot state.
-- **Write ordering:** Store writes remain sequential because `Promise.all` cannot provide rollback or multi-key atomicity.
+- **Write ordering:** Transfer writes run concurrently inside both account locks to reduce latency; `Promise.all` still cannot provide rollback or multi-key atomicity.
 
 ## 3. Meeting the SLOs
 
@@ -36,7 +38,9 @@
 - **Summary fix:** Summaries now use the maintained company projection instead of scanning all account ledgers.
 - **Summary parallelism:** Account count and company state are fetched concurrently.
 - **Ledger-read index:** Added a per-account entry index so account ledger reads avoid scanning the entire global log.
-- **Balance-read stretch goal:** Cached balance requests return the scalar projection directly without cloning ledger entries.
+- **Read cache:** Cached balance requests return the scalar projection directly without cloning ledger entries; this optimization is separate from correctness.
+- **Idempotency hot path:** New claims use one atomic claim attempt; only claim conflicts perform a follow-up record read.
+- **Transfer batching:** Transfer balance reads, ledger reads, and independent store writes run in parallel while account locks remain held.
 - **Correctness preserved:** Readers see the prior complete snapshot or the next complete snapshot, never a planned partial snapshot.
 
 ## 4. What was deliberately not done
@@ -49,6 +53,7 @@
 - **Persistent write limitation:** A permanently unavailable balance store can still leave an appended entry without its projection; this requires durable reconciliation.
 - **Combined snapshot endpoint:** Added `GET /accounts/:id/state`, returning balance, ledger entries, and a version from one completed snapshot.
 - **Cross-request behavior:** Existing separate balance and ledger requests can still observe different completed versions; clients needing one view should use the combined endpoint.
+- **HTTP compatibility:** Existing endpoints remain unchanged; the combined state endpoint is additive.
 
 ## 5. Production traffic and multi-instance behavior
 
