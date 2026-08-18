@@ -35,6 +35,8 @@
 - **Cold-read fix:** Complete pre-operation snapshots are installed before transfer or issue writes begin.
 - **Summary fix:** Summaries now use the maintained company projection instead of scanning all account ledgers.
 - **Summary parallelism:** Account count and company state are fetched concurrently.
+- **Ledger-read index:** Added a per-account entry index so account ledger reads avoid scanning the entire global log.
+- **Balance-read stretch goal:** Cached balance requests return the scalar projection directly without cloning ledger entries.
 - **Correctness preserved:** Readers see the prior complete snapshot or the next complete snapshot, never a planned partial snapshot.
 
 ## 4. What was deliberately not done

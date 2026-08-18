@@ -35,6 +35,7 @@ export interface Versioned<T> {
 export class Store {
   private accounts = new Map<string, Account>();
   private entries: LedgerEntry[] = [];
+  private entriesByAccount = new Map<string, LedgerEntry[]>();
   private balances = new Map<string, Versioned<number>>();
   private companyState: Versioned<CompanyState> = {
     value: { authorizedShares: 0, issuedShares: 0 },
@@ -82,12 +83,15 @@ export class Store {
   async appendEntry(entry: LedgerEntry): Promise<void> {
     await this.write(() => {
       this.entries.push(entry);
+      const accountEntries = this.entriesByAccount.get(entry.accountId) ?? [];
+      accountEntries.push(entry);
+      this.entriesByAccount.set(entry.accountId, accountEntries);
     });
   }
 
   /** Scans the log. Cost grows with the total number of entries in the system. */
   async listEntries(accountId: string): Promise<LedgerEntry[]> {
-    return this.read(this.entries.filter((e) => e.accountId === accountId));
+    return this.read([...(this.entriesByAccount.get(accountId) ?? [])]);
   }
 
   /** Full log scan. Used by tests to verify invariants. Never call this on a request path. */

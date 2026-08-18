@@ -68,6 +68,7 @@ export class LedgerService {
   // company-wide authorized-shares ceiling, which every issue contends on.
   private readonly locks = new KeyedMutex();
   private readonly accountSnapshots = new Map<string, AccountSnapshot>();
+  private readonly accounts = new Map<string, Account>();
   private readonly completedIdempotency = new Map<string, IdempotencyRecord>();
   private readonly accountVersions = new Map<string, number>();
   private static readonly COMPANY_LOCK = "__company__";
@@ -90,6 +91,27 @@ export class LedgerService {
       }
     }
     throw lastError;
+  }
+
+  private async getWriteSnapshot(accountId: string): Promise<AccountSnapshot> {
+    const cached = this.accountSnapshots.get(accountId);
+    if (cached) {
+      return {
+        balance: cached.balance,
+        entries: [...cached.entries],
+        version: cached.version,
+      };
+    }
+
+    const [balance, entries] = await Promise.all([
+      this.store.getBalance(accountId),
+      this.store.listEntries(accountId),
+    ]);
+    return {
+      balance: balance.value,
+      entries: [...entries],
+      version: this.accountVersions.get(accountId) ?? 0,
+    };
   }
 
   private async runIdempotent<T>(
@@ -156,6 +178,23 @@ export class LedgerService {
       createdAt: Date.now(),
     };
     await this.store.putAccount(account);
+    this.accounts.set(account.id, account);
+    return account;
+  }
+
+  private async getAccount(accountId: string): Promise<Account> {
+    const cached = this.accounts.get(accountId);
+    if (cached) return cached;
+
+    const account = await this.store.getAccount(accountId);
+    if (!account) {
+      throw new AppError(
+        404,
+        "ACCOUNT_NOT_FOUND",
+        `no such account: ${accountId}`,
+      );
+    }
+    this.accounts.set(accountId, account);
     return account;
   }
 
@@ -170,14 +209,7 @@ export class LedgerService {
     }
     assertValidShares(cmd.shares);
 
-    const account = await this.store.getAccount(cmd.accountId);
-    if (!account) {
-      throw new AppError(
-        404,
-        "ACCOUNT_NOT_FOUND",
-        `no such account: ${cmd.accountId}`,
-      );
-    }
+    await this.getAccount(cmd.accountId);
 
     return this.runIdempotent(cmd.idempotencyKey, issueFingerprint(cmd), () =>
       // Everything below is check-then-write, so it must all run under this
@@ -207,12 +239,13 @@ export class LedgerService {
         });
 
         try {
-          const balance = await this.store.getBalance(cmd.accountId);
-          const existing = await this.store.listEntries(cmd.accountId);
+          const snapshot = await this.getWriteSnapshot(cmd.accountId);
+          const balance = snapshot.balance;
+          const existing = snapshot.entries;
           this.accountSnapshots.set(cmd.accountId, {
-            balance: balance.value,
+            balance,
             entries: [...existing],
-            version: this.accountVersions.get(cmd.accountId) ?? 0,
+            version: snapshot.version,
           });
           const entry: LedgerEntry = {
             id: randomUUID(),
@@ -224,16 +257,13 @@ export class LedgerService {
             createdAt: Date.now(),
           };
           await this.store.appendEntry(entry);
-          await this.putBalanceWithRetry(
-            cmd.accountId,
-            balance.value + cmd.shares,
-          );
+          await this.putBalanceWithRetry(cmd.accountId, balance + cmd.shares);
 
           const result: IssueResult = {
             entryId: entry.id,
             accountId: cmd.accountId,
             shares: cmd.shares,
-            balance: balance.value + cmd.shares,
+            balance: balance + cmd.shares,
           };
           this.accountSnapshots.set(cmd.accountId, {
             balance: result.balance,
@@ -282,22 +312,10 @@ export class LedgerService {
       );
     }
 
-    const from = await this.store.getAccount(cmd.fromAccountId);
-    if (!from) {
-      throw new AppError(
-        404,
-        "ACCOUNT_NOT_FOUND",
-        `no such account: ${cmd.fromAccountId}`,
-      );
-    }
-    const to = await this.store.getAccount(cmd.toAccountId);
-    if (!to) {
-      throw new AppError(
-        404,
-        "ACCOUNT_NOT_FOUND",
-        `no such account: ${cmd.toAccountId}`,
-      );
-    }
+    await Promise.all([
+      this.getAccount(cmd.fromAccountId),
+      this.getAccount(cmd.toAccountId),
+    ]);
 
     return this.runIdempotent(
       cmd.idempotencyKey,
@@ -306,13 +324,14 @@ export class LedgerService {
         // Lock both accounts, always in sorted order, so this and its reverse
         // (B->A) can never each hold one account's lock while waiting on the other.
         this.locks.runMany([cmd.fromAccountId, cmd.toAccountId], async () => {
-          const [fromBalance, toBalance, fromEntries, toEntries] =
-            await Promise.all([
-              this.store.getBalance(cmd.fromAccountId),
-              this.store.getBalance(cmd.toAccountId),
-              this.store.listEntries(cmd.fromAccountId),
-              this.store.listEntries(cmd.toAccountId),
-            ]);
+          const [fromSnapshot, toSnapshot] = await Promise.all([
+            this.getWriteSnapshot(cmd.fromAccountId),
+            this.getWriteSnapshot(cmd.toAccountId),
+          ]);
+          const fromBalance = { value: fromSnapshot.balance };
+          const toBalance = { value: toSnapshot.balance };
+          const fromEntries = fromSnapshot.entries;
+          const toEntries = toSnapshot.entries;
           if (fromBalance.value < cmd.shares) {
             throw new AppError(
               409,
@@ -445,6 +464,9 @@ export class LedgerService {
   }
 
   async getBalance(accountId: string): Promise<number> {
+    const cached = this.accountSnapshots.get(accountId);
+    if (cached) return cached.balance;
+
     const snapshot = await this.getAccountSnapshot(accountId);
     return snapshot.balance;
   }
